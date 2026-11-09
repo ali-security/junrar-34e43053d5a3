@@ -1,15 +1,12 @@
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches-ignore:
-      - 'dependabot/**'
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     strategy:
       matrix:
         java: [ 8, 11, 17, 18 ]
@@ -29,14 +26,47 @@ jobs:
         uses: gradle/gradle-build-action@v2
         with:
           arguments: jacocoTestReport
-      - uses: codecov/codecov-action@v2
+      - name: Test results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          tot = fail = err = skip = 0
+          for f in sorted(glob.glob('build/test-results/test/*.xml')):
+              for tc in ET.parse(f).getroot().iter('testcase'):
+                  tot += 1
+                  name = tc.get('classname') + '.' + tc.get('name')
+                  if tc.find('failure') is not None:
+                      fail += 1; print('FAILED  ' + name)
+                  elif tc.find('error') is not None:
+                      err += 1; print('ERROR   ' + name)
+                  elif tc.find('skipped') is not None:
+                      skip += 1; print('SKIPPED ' + name + ' : ' + (tc.find('skipped').get('message') or 'no message'))
+                  else:
+                      print('PASSED  ' + name)
+          print('Tests run: %d, Passed: %d, Failures: %d, Errors: %d, Skipped: %d' % (tot, tot - fail - err - skip, fail, err, skip))
+          EOF
+      - name: Build release jars
         if: matrix.java == '8'
+        run: |
+          ./gradlew assemble jar
+          ls -la build/libs
+      - uses: actions/upload-artifact@v4
+        if: matrix.java == '8'
+        with:
+          name: junrar-jar
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
+            !build/libs/*-javadoc.jar
+          if-no-files-found: error
 
   release:
     name: semantic release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: false
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v2
